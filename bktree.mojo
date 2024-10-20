@@ -240,24 +240,23 @@ struct BKTree:
 
     fn search(
         self: Self, query: String, max_distance: Int
-    ) raises -> Optional[String]:
+    ) raises -> List[String]:
         if not self.root:
-            return None
+            return List[String]()
 
+        result = List[String]()
         # Now we make a copy (I think), which is inefficient. Instead, we can use a reference.
         nodes_to_process = List[BKTreeNode](self.root.value())
 
-        best_distance = max_distance
-        var best_node: Optional[String] = None
         while len(nodes_to_process) > 0:
             current_node = nodes_to_process.pop()
             current_node_distance_to_query = levenshtein_distance(
                 current_node.text, query
             )
 
-            if current_node_distance_to_query < best_distance:
-                best_distance = current_node_distance_to_query
-                best_node = current_node.text
+            # The current node is within the max distance, so we add it to the result.
+            if current_node_distance_to_query <= max_distance:
+                result.append(current_node.text)
 
             for child in current_node.children:
                 if (
@@ -266,9 +265,10 @@ struct BKTree:
                     )
                     <= max_distance
                 ):
+                    # Here we're also copying the child (I think), which is inefficient.
                     nodes_to_process.append(child[])
 
-        return best_node
+        return result
 
 
 fn main() raises:
@@ -295,7 +295,7 @@ fn main() raises:
 
     print("Query: " + query)
     if result:
-        print("Found:", result.value())
+        print("Found:", print_list(result))
     else:
         print("Not found")
 
