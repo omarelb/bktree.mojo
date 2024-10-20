@@ -1,6 +1,9 @@
 from python import Python
+import os
 from collections import Optional
 from my_utils import TestableCollectionElement, print_list
+import time
+from memory import Pointer, Arc, UnsafePointer
 
 
 fn levenshtein_distance(a: String, b: String) raises -> Int:
@@ -100,7 +103,7 @@ struct BKTreeNode(TestableCollectionElement):
         self.parent_distance = existing.parent_distance
         self.children = existing.children
 
-    fn __moveinit__(inout self: BKTreeNode, owned existing: BKTreeNode):
+    fn __moveinit__(inout self: Self, owned existing: Self):
         self.text = existing.text^
         self.parent_distance = existing.parent_distance
         self.children = existing.children^
@@ -114,22 +117,17 @@ struct BKTreeNode(TestableCollectionElement):
 
         quick_sort[BKTreeNode, lt](self.children)
 
-    # fn __moveinit__(inout self, owned existing: Self):
-    #     self.text = existing.text^
-    #     self.parent_distance = existing.parent_distance
-    #     self.children = existing.children^
-
-    fn format_to(self: BKTreeNode, inout writer: Formatter) -> None:
+    fn write_to[W: Writer](self, inout writer: W):
         writer.write(
-            "BKTreeNode("
-            + "text='"
-            + self.text
-            + "'"
-            + ", parent_distance="
-            + str(self.parent_distance)
-            + ", num_children="
-            + str(len(self.children))
-            + ")"
+            "BKTreeNode(",
+            "text='",
+            self.text,
+            "'",
+            ", parent_distance=",
+            str(self.parent_distance),
+            ", num_children=",
+            str(len(self.children)),
+            ")",
         )
 
     fn __eq__(self: Self, other: Self) -> Bool:
@@ -143,7 +141,7 @@ struct BKTreeNode(TestableCollectionElement):
         return not (self == other)
 
     fn __str__(self: BKTreeNode) -> String:
-        return String.format_sequence(self)
+        return String.write(self)
 
     fn traverse(self: BKTreeNode, path: String) raises -> Optional[BKTreeNode]:
         """Traverse the tree using a path string, where each node text is separated by '->'.
@@ -160,7 +158,7 @@ struct BKTreeNode(TestableCollectionElement):
         if len(path_parts) == 0:
             return None
 
-        current_node = Reference(self)
+        current_node = Arc(self)
 
         if path_parts[0] != current_node[].text:
             return None
@@ -181,21 +179,30 @@ struct BKTree:
     fn __init__(inout self: Self, root: Optional[BKTreeNode] = None) -> None:
         self.root = root
 
+    fn __init__(inout self: Self, elements: List[String]) raises -> None:
+        self = BKTree()
+        for element in elements:
+            self.insert_element(element[])
+
     fn traverse(self: Self, path: String) raises -> Optional[BKTreeNode]:
         if not self.root:
             return None
 
         return self.root.value().traverse(path)
 
-    # TODO: make generic over distance metric and type of element.
-    fn insert_element(inout self: Self, text: String) raises -> None:
-        alias node_reference = Reference[BKTreeNode, __lifetime_of(self.root)]
+    fn insert_elements(
+        inout self: Self, owned elements: List[String]
+    ) raises -> None:
+        for element in elements:
+            self.insert_element(element[])
 
+    # # TODO: make generic over distance metric and type of element.
+    fn insert_element(inout self: Self, text: String) raises -> None:
         if self.root is None:
             self.root = BKTreeNode(text=text, parent_distance=0)
             return
 
-        current_node_reference = node_reference(self.root.value())
+        current_node_reference = Pointer.address_of(self.root.value())
 
         while True:
             distance_to_current_node = levenshtein_distance(
@@ -207,13 +214,13 @@ struct BKTree:
                 return
 
             var child_with_same_distance_reference: Optional[
-                node_reference
+                Pointer[BKTreeNode, __origin_of(self.root._value)]
             ] = None
             for child in current_node_reference[].children:
                 if child[].parent_distance == distance_to_current_node:
-                    child_with_same_distance_reference = Reference[
-                        BKTreeNode, __lifetime_of(self.root)
-                    ](child[])
+                    child_with_same_distance_reference = Pointer.address_of(
+                        child[]
+                    )
 
             is_child_with_same_distance_found = (
                 child_with_same_distance_reference is not None
@@ -231,15 +238,70 @@ struct BKTree:
 
         return
 
+    fn search(
+        self: Self, query: String, max_distance: Int
+    ) raises -> Optional[String]:
+        if not self.root:
+            return None
+
+        # Now we make a copy (I think), which is inefficient. Instead, we can use a reference.
+        nodes_to_process = List[BKTreeNode](self.root.value())
+
+        best_distance = max_distance
+        var best_node: Optional[String] = None
+        while len(nodes_to_process) > 0:
+            current_node = nodes_to_process.pop()
+            current_node_distance_to_query = levenshtein_distance(
+                current_node.text, query
+            )
+
+            if current_node_distance_to_query < best_distance:
+                best_distance = current_node_distance_to_query
+                best_node = current_node.text
+
+            for child in current_node.children:
+                if (
+                    abs(
+                        child[].parent_distance - current_node_distance_to_query
+                    )
+                    <= max_distance
+                ):
+                    nodes_to_process.append(child[])
+
+        return best_node
+
 
 fn main() raises:
-    tree = BKTree()
-    tree.insert_element("book")
-    tree.insert_element("books")
-    tree.insert_element("boo")
-    boo_node = tree.root.value().traverse("book->books->boo")
+    max_distance = 1
 
-    if boo_node:
-        print(boo_node.value().text)
+    t0 = time.perf_counter_ns()
+    # Open the file using a context manager
+    lines = List[String]()
+    with open("dutch_words.txt", "r") as file:
+        # Read the entire content of the file
+        t01 = time.perf_counter_ns()
+        content = file.read()
+        t02 = time.perf_counter_ns()
+        lines = content.lower().split("\n")
+
+    t1 = time.perf_counter_ns()
+    tree = BKTree(lines)
+    t2 = time.perf_counter_ns()
+
+    query = "koperroo"
+
+    result = tree.search(query, max_distance)
+    t3 = time.perf_counter_ns()
+
+    print("Query: " + query)
+    if result:
+        print("Found:", result.value())
     else:
-        print("boo node not found")
+        print("Not found")
+
+    print("Time to open file:", (t01 - t0) / 1_000_000, "ms")
+    print("Time to read file content:", (t02 - t01) / 1_000_000, "ms")
+    print("Time to to split lines:", (t1 - t02) / 1_000_000, "ms")
+    print("Time to build tree:", (t2 - t1) / 1_000_000, "ms")
+    print("Time to search:", (t3 - t2) / 1_000_000, "ms")
+    print("Total time:", (t3 - t0) / 1_000_000, "ms")

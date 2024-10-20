@@ -1,7 +1,7 @@
 from testing.testing import Testable
 
 
-trait TestableCollectionElement(Testable, CollectionElement, Formattable):
+trait TestableCollectionElement(Testable, CollectionElement, Writable):
     pass
 
 

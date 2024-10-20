@@ -1,6 +1,6 @@
 [project]
 authors = ["Omar Elbaghdadi <omar@attendi.nl>"]
-channels = ["conda-forge", "https://conda.modular.com/max"]
+channels = ["conda-forge", "https://conda.modular.com/max-nightly"]
 description = "Add a short description here"
 name = "mojo-bktree"
 platforms = ["osx-arm64"]
@@ -9,6 +9,7 @@ version = "0.1.0"
 [tasks]
 
 [dependencies]
-max = ">=24.5.0,<25"
+max = ">=24.6.0.dev2024102005,<25"
 rapidfuzz = ">=3.10.0,<4"
 ipykernel = ">=6.29.5,<7"
+pybktree = ">=1.1,<2"
