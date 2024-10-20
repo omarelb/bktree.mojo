@@ -4,12 +4,26 @@ from collections import Optional
 from my_utils import TestableCollectionElement, print_list
 import time
 from memory import Pointer, Arc, UnsafePointer
+from max.tensor import Tensor, TensorSpec, TensorShape
+from collections.vector import InlinedFixedVector
+from utils import Variant
+import benchmark
+from benchmark import Unit
+
+from levenshtein import levenshtein_distance
 
 
-fn levenshtein_distance(a: String, b: String) raises -> Int:
+fn levenshtein_distance_2(a: String, b: String) raises -> Int:
+    t0 = time.perf_counter_ns()
     rapidfuzz = Python.import_module("rapidfuzz")
+    t1 = time.perf_counter_ns()
 
-    return rapidfuzz.distance.Levenshtein.distance(a, b)
+    distance = rapidfuzz.distance.Levenshtein.distance(a, b)
+    t2 = time.perf_counter_ns()
+
+    # print("Time to import rapidfuzz:", (t1 - t0) / 1_000_000, "ms")
+    # print("Time to calculate distance:", (t2 - t1) / 1_000_000, "ms")
+    return distance
 
 
 @always_inline
@@ -117,6 +131,16 @@ struct BKTreeNode(TestableCollectionElement):
 
         quick_sort[BKTreeNode, lt](self.children)
 
+    fn __eq__(self: Self, other: Self) -> Bool:
+        return (
+            self.text == other.text
+            and self.parent_distance == other.parent_distance
+            and len(self.children) == len(other.children)
+        )
+
+    fn __ne__(self: Self, other: Self) -> Bool:
+        return not (self == other)
+
     fn write_to[W: Writer](self, inout writer: W):
         writer.write(
             "BKTreeNode(",
@@ -129,16 +153,6 @@ struct BKTreeNode(TestableCollectionElement):
             str(len(self.children)),
             ")",
         )
-
-    fn __eq__(self: Self, other: Self) -> Bool:
-        return (
-            self.text == other.text
-            and self.parent_distance == other.parent_distance
-            and len(self.children) == len(other.children)
-        )
-
-    fn __ne__(self: Self, other: Self) -> Bool:
-        return not (self == other)
 
     fn __str__(self: BKTreeNode) -> String:
         return String.write(self)
@@ -172,6 +186,13 @@ struct BKTreeNode(TestableCollectionElement):
         return None
 
 
+fn split_string_into_chars(string: String) -> List[String]:
+    result = List[String](capacity=len(string))
+    for i in range(len(string)):
+        result.append(string[i : i + 1])
+    return result
+
+
 @value
 struct BKTree:
     var root: Optional[BKTreeNode]
@@ -181,8 +202,12 @@ struct BKTree:
 
     fn __init__(inout self: Self, elements: List[String]) raises -> None:
         self = BKTree()
-        for element in elements:
-            self.insert_element(element[])
+        for i in range(len(elements)):
+            if i % 1000 == 0:
+                print("Inserting element", i)
+            self.insert_element(elements[i])
+        # for element in elements:
+        #     self.insert_element(element[])
 
     fn traverse(self: Self, path: String) raises -> Optional[BKTreeNode]:
         if not self.root:
@@ -196,18 +221,41 @@ struct BKTree:
         for element in elements:
             self.insert_element(element[])
 
-    # # TODO: make generic over distance metric and type of element.
+    # TODO: make generic over distance metric and type of element.
     fn insert_element(inout self: Self, text: String) raises -> None:
+        t0 = time.perf_counter_ns()
         if self.root is None:
             self.root = BKTreeNode(text=text, parent_distance=0)
             return
 
+        t0 = time.perf_counter_ns()
         current_node_reference = Pointer.address_of(self.root.value())
+        t1 = time.perf_counter_ns()
+        # print(
+        #     "Time to get root reference:",
+        #     (t1 - t0) / 1,
+        #     "ms",
+        # )
 
         while True:
-            distance_to_current_node = levenshtein_distance(
-                current_node_reference[].text, text
+            t0 = time.perf_counter_ns()
+            reference_split = split_string_into_chars(
+                current_node_reference[].text
             )
+            text_split = split_string_into_chars(text)
+            t1 = time.perf_counter_ns()
+            # print("Time to split strings:", (t1 - t0) / 1_000_000, "ms")
+
+            tl = time.perf_counter_ns()
+
+            distance_to_current_node = levenshtein_distance(
+                reference_split, text_split
+            ).cost
+            # distance_to_current_node = levenshtein_distance_2(
+            #     current_node_reference[].text, text
+            # )
+            tu = time.perf_counter_ns()
+            # print("Time to calculate distance:", Float16(tu - tl) / 1_000, "μs")
 
             if distance_to_current_node == 0:
                 # We already have this word in the tree, do nothing.
@@ -216,11 +264,13 @@ struct BKTree:
             var child_with_same_distance_reference: Optional[
                 Pointer[BKTreeNode, __origin_of(self.root._value)]
             ] = None
+
             for child in current_node_reference[].children:
                 if child[].parent_distance == distance_to_current_node:
                     child_with_same_distance_reference = Pointer.address_of(
                         child[]
                     )
+                    break
 
             is_child_with_same_distance_found = (
                 child_with_same_distance_reference is not None
@@ -231,10 +281,21 @@ struct BKTree:
                 )
                 continue
 
+            t0 = time.perf_counter_ns()
             current_node_reference[].add_child(
                 BKTreeNode(text=text, parent_distance=distance_to_current_node)
             )
+            t1 = time.perf_counter_ns()
+            # print(
+            #     "Time to add child:",
+            #     (t0 - t1) / 1_000_000,
+            #     "ms",
+            # )
             break
+
+        t1 = time.perf_counter_ns()
+
+        # print("Time to insert element:", (t1 - t0) / 1_000_000, "ms")
 
         return
 
@@ -250,9 +311,12 @@ struct BKTree:
 
         while len(nodes_to_process) > 0:
             current_node = nodes_to_process.pop()
+            # current_node_distance_to_query = levenshtein_distance_2(
+            #     current_node.text, query
+            # )
             current_node_distance_to_query = levenshtein_distance(
                 current_node.text, query
-            )
+            ).cost
 
             # The current node is within the max distance, so we add it to the result.
             if current_node_distance_to_query <= max_distance:
@@ -272,36 +336,102 @@ struct BKTree:
 
 
 fn main() raises:
-    max_distance = 1
+    # max_distance = 1
 
+    # t0 = time.perf_counter_ns()
+    # # Open the file using a context manager
+    # lines = List[String]()
+    # with open("dutch_words.txt", "r") as file:
+    #     # Read the entire content of the file
+    #     t01 = time.perf_counter_ns()
+    #     content = file.read()
+    #     t02 = time.perf_counter_ns()
+    #     lines = content.lower().split("\n")
+
+    # print("opened words")
+
+    # t1 = time.perf_counter_ns()
+    # tree = BKTree(lines)
+    # t2 = time.perf_counter_ns()
+
+    # print("built tree")
+
+    # query = "koperroo"
+
+    # result = tree.search(query, max_distance)
+    # print("searched")
+    # t3 = time.perf_counter_ns()
+
+    # print("Query: " + query)
+    # if result:
+    #     print("Found:", print_list(result))
+    # else:
+    #     print("Not found")
+
+    # print("Time to open file:", (t01 - t0) / 1_000_000, "ms")
+    # print("Time to read file content:", (t02 - t01) / 1_000_000, "ms")
+    # print("Time to to split lines:", (t1 - t02) / 1_000_000, "ms")
+    # print("Time to build tree:", (t2 - t1) / 1_000_000, "ms")
+    # print("Time to search:", (t3 - t2) / 1_000_000, "ms")
+    # print("Total time:", (t3 - t0) / 1_000_000, "ms")
+
+    # original = "ik was er".split(" ")
+    # transformed = "ik was".split(" ")
+
+    # t0 = time.perf_counter_ns()
+    # r = levenshtein_distance2(original, transformed)
+    # t1 = time.perf_counter_ns()
+
+    # print(r)
+
+    # print("Time to calculate distance:", (t1 - t0) / 1_000_000, "ms")
+    # var report = benchmark.run[lev_benchmark](max_iters=100000)
+
+    # report.print(Unit.ms)
+
+    str1 = "werkingsprincipe"
+    str2 = "aanbranden"
+    reference_split = split_string_into_chars(str1)
+    text_split = split_string_into_chars(str2)
     t0 = time.perf_counter_ns()
-    # Open the file using a context manager
-    lines = List[String]()
-    with open("dutch_words.txt", "r") as file:
-        # Read the entire content of the file
-        t01 = time.perf_counter_ns()
-        content = file.read()
-        t02 = time.perf_counter_ns()
-        lines = content.lower().split("\n")
-
+    _ = levenshtein_distance(reference_split, text_split)
     t1 = time.perf_counter_ns()
-    tree = BKTree(lines)
-    t2 = time.perf_counter_ns()
+    print("Time to calculate distance:", (t1 - t0) / 1_000_000, "ms")
 
-    query = "koperroo"
 
-    result = tree.search(query, max_distance)
-    t3 = time.perf_counter_ns()
-
-    print("Query: " + query)
-    if result:
-        print("Found:", print_list(result))
-    else:
-        print("Not found")
-
-    print("Time to open file:", (t01 - t0) / 1_000_000, "ms")
-    print("Time to read file content:", (t02 - t01) / 1_000_000, "ms")
-    print("Time to to split lines:", (t1 - t02) / 1_000_000, "ms")
-    print("Time to build tree:", (t2 - t1) / 1_000_000, "ms")
-    print("Time to search:", (t3 - t2) / 1_000_000, "ms")
-    print("Total time:", (t3 - t0) / 1_000_000, "ms")
+fn lev_benchmark() raises:
+    reference_split = List[String](
+        String("w"),
+        String("e"),
+        String("r"),
+        String("k"),
+        String("i"),
+        String("n"),
+        String("g"),
+        String("s"),
+        String("p"),
+        String("r"),
+        String("i"),
+        String("n"),
+        String("c"),
+        String("i"),
+        String("p"),
+        String("e"),
+    )
+    text_split = List[String](
+        String("a"),
+        String("a"),
+        String("n"),
+        String("b"),
+        String("r"),
+        String("a"),
+        String("n"),
+        String("d"),
+        String("e"),
+        String("n"),
+    )
+    # str1 = "werkingsprincipe"
+    # str2 = "aanbranden"
+    # reference_split = split_string_into_chars(str1)
+    # text_split = split_string_into_chars(str2)
+    _ = levenshtein_distance(reference_split, text_split)
