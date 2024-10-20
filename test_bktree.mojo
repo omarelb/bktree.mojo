@@ -70,6 +70,61 @@ def test_add_child_with_existing_child_distance():
     assert_optional_equal(boo_node, Optional(BKTreeNode("boo", 2)))
 
 
+def test_larger_example():
+    tree = BKTree()
+    tree.insert_element("book")
+    tree.insert_element("books")
+
+    assert_optional_equal(
+        tree.root.value().traverse("book->books"),
+        Optional(
+            BKTreeNode(
+                "books",
+                1,
+            )
+        ),
+    )
+
+    tree.insert_element("boo")
+
+    assert_optional_equal(
+        tree.root.value().traverse("book->books->boo"),
+        Optional(BKTreeNode("boo", 2)),
+    )
+
+    tree.insert_element("boon")
+
+    assert_optional_equal(
+        tree.root.value().traverse("book->books->boo->boon"),
+        Optional(BKTreeNode("boon", 1)),
+    )
+
+    tree.insert_element("cook")
+
+    assert_optional_equal(
+        tree.root.value().traverse("book->books->boo->cook"),
+        Optional(BKTreeNode("cook", 2)),
+    )
+
+    tree.insert_element("cake")
+    assert_optional_equal(
+        tree.root.value().traverse("book->cake"),
+        Optional(BKTreeNode("cake", 4)),
+    )
+
+    tree.insert_element("cape")
+    assert_optional_equal(
+        tree.root.value().traverse("book->cake->cape"),
+        Optional(BKTreeNode("cape", 1)),
+    )
+
+    tree.insert_element("cart")
+    assert_optional_equal(
+        tree.root.value().traverse("book->cake->cart"),
+        Optional(BKTreeNode("cart", 2)),
+    )
+
+
 def assert_optional_equal[
     T: TestableCollectionElement
 ](actual: Optional[T], expected: Optional[T]):

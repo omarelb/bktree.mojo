@@ -85,6 +85,21 @@ struct BKTreeNode(TestableCollectionElement):
         self.parent_distance = parent_distance
         self.children = List[BKTreeNode]()
 
+    fn __init__(
+        inout self: BKTreeNode,
+        text: String,
+        parent_distance: Int,
+        children: List[BKTreeNode],
+    ):
+        self.text = text
+        self.parent_distance = parent_distance
+        self.children = children
+
+    fn __copyinit__(inout self: BKTreeNode, existing: BKTreeNode):
+        self.text = existing.text
+        self.parent_distance = existing.parent_distance
+        self.children = existing.children
+
     fn __moveinit__(inout self: BKTreeNode, owned existing: BKTreeNode):
         self.text = existing.text^
         self.parent_distance = existing.parent_distance
@@ -131,7 +146,8 @@ struct BKTreeNode(TestableCollectionElement):
         return String.format_sequence(self)
 
     fn traverse(self: BKTreeNode, path: String) raises -> Optional[BKTreeNode]:
-        """Traverse the tree using a path string, where each node text is separated by '->'.""" 
+        """Traverse the tree using a path string, where each node text is separated by '->'.
+        """
         # Handles the case where there's a single path without separator. This should
         # be the leaf node.
         if path == self.text:
@@ -173,47 +189,48 @@ struct BKTree:
 
     # TODO: make generic over distance metric and type of element.
     fn insert_element(inout self: Self, text: String) raises -> None:
+        alias node_reference = Reference[BKTreeNode, __lifetime_of(self.root)]
+
         if self.root is None:
             self.root = BKTreeNode(text=text, parent_distance=0)
             return
 
-        # TODO: turn UnsafePointer into a proper type like Reference.
-        current_node_pointer = UnsafePointer[BKTreeNode].address_of(
-            self.root.value()
-        )
+        current_node_reference = node_reference(self.root.value())
 
         while True:
             distance_to_current_node = levenshtein_distance(
-                current_node_pointer[].text, text
+                current_node_reference[].text, text
             )
 
             if distance_to_current_node == 0:
                 # We already have this word in the tree, do nothing.
                 return
 
-            var child_with_same_distance_pointer: Optional[
-                UnsafePointer[BKTreeNode]
+            var child_with_same_distance_reference: Optional[
+                node_reference
             ] = None
-            for child in current_node_pointer[].children:
+            for child in current_node_reference[].children:
                 if child[].parent_distance == distance_to_current_node:
-                    child_with_same_distance_pointer = UnsafePointer[
-                        BKTreeNode
-                    ].address_of(child[])
-                    break
+                    child_with_same_distance_reference = Reference[
+                        BKTreeNode, __lifetime_of(self.root)
+                    ](child[])
 
             is_child_with_same_distance_found = (
-                child_with_same_distance_pointer is not None
+                child_with_same_distance_reference is not None
             )
             if is_child_with_same_distance_found:
-                current_node_pointer = child_with_same_distance_pointer.value()
+                current_node_reference = (
+                    child_with_same_distance_reference.value()
+                )
                 continue
 
-            current_node_pointer[].add_child(
+            current_node_reference[].add_child(
                 BKTreeNode(text=text, parent_distance=distance_to_current_node)
             )
             break
 
         return
+
 
 fn main() raises:
     tree = BKTree()
