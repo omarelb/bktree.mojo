@@ -387,7 +387,7 @@ fn main() raises:
     # print("Time to calculate distance:", (t1 - t0) / 1_000_000, "ms")
     # var report = benchmark.run[lev_benchmark](max_iters=100000)
 
-    # report.print(Unit.ms)
+    # report.print(Unit.ns)
 
     str1 = "werkingsprincipe"
     str2 = "aanbranden"
@@ -396,42 +396,12 @@ fn main() raises:
     t0 = time.perf_counter_ns()
     _ = levenshtein_distance(reference_split, text_split)
     t1 = time.perf_counter_ns()
-    print("Time to calculate distance:", (t1 - t0) / 1_000_000, "ms")
-
-
-fn lev_benchmark() raises:
-    reference_split = List[String](
-        String("w"),
-        String("e"),
-        String("r"),
-        String("k"),
-        String("i"),
-        String("n"),
-        String("g"),
-        String("s"),
-        String("p"),
-        String("r"),
-        String("i"),
-        String("n"),
-        String("c"),
-        String("i"),
-        String("p"),
-        String("e"),
+    print(
+        "Time to calculate distance:",
+        (t1 - t0),
+        "ns",
     )
-    text_split = List[String](
-        String("a"),
-        String("a"),
-        String("n"),
-        String("b"),
-        String("r"),
-        String("a"),
-        String("n"),
-        String("d"),
-        String("e"),
-        String("n"),
-    )
-    # str1 = "werkingsprincipe"
-    # str2 = "aanbranden"
-    # reference_split = split_string_into_chars(str1)
-    # text_split = split_string_into_chars(str2)
-    _ = levenshtein_distance(reference_split, text_split)
+    # for op in r.operations:
+    #     x = op[]
+    #     x.take()
+    #     print(op[])

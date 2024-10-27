@@ -125,6 +125,25 @@ def test_larger_example():
     )
 
 
+# def test_search_tree():
+#     var elements: List[String] = List[String](
+#         String("book"),
+#         String("books"),
+#         String("boo"),
+#         String("boon"),
+#         String("cook"),
+#         String("cake"),
+#         String("cape"),
+#         String("cart"),
+#     )
+
+#     tree = BKTree(elements)
+
+#     result = tree.search(String("books"), max_distance=0)
+
+#     assert_optional_equal(result, Optional(String("books")))
+
+
 def assert_optional_equal[
     T: TestableCollectionElement
 ](actual: Optional[T], expected: Optional[T]):

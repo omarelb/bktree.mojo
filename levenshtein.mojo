@@ -1,24 +1,43 @@
 from utils import Variant
+from memory import memset_zero, UnsafePointer
 import time
 from my_utils import TestableCollectionElement, print_list
+from collections import InlinedFixedVector
 
 
-@value
+alias Substitution = 0
+alias Insertion = 1
+alias Deletion = 2
+alias Null = 3
+
+
+# @value
 struct LevenshteinNode[T: TestableCollectionElement]:
-    alias operation_type = Variant[
-        LevenshteinSubstitution[T],
-        LevenshteinInsertion[T],
-        LevenshteinDeletion[T],
-        NoneType,
-    ]
+    # alias operation_type = Variant[
+    #     LevenshteinSubstitution[T],
+    #     LevenshteinInsertion[T],
+    #     LevenshteinDeletion[T],
+    #     NoneType,
+    # ]
 
     var cost: Int
-    var operation: Self.operation_type
+    # var operation: Self.operation_type
+    var operation: Int
+
+    fn __init__(inout self: Self, cost: Int, owned operation: Int):
+        self.cost = cost
+        self.operation = operation
+
+    fn __copyinit__(inout self: Self, other: Self):
+        self.cost = other.cost
+        self.operation = other.operation
+
+    fn __moveinit__(inout self: Self, owned other: Self):
+        self.cost = other.cost
+        self.operation = other.operation^
 
     fn __eq__(self: Self, other: Self) -> Bool:
-        return self.cost == other.cost and levenshtein_operation_equal(
-            self.operation, other.operation
-        )
+        return self.cost == other.cost and self.operation == other.operation
 
     fn __ne__(self: Self, other: Self) -> Bool:
         return not (self == other)
@@ -29,7 +48,7 @@ struct LevenshteinNode[T: TestableCollectionElement]:
             "cost=",
             str(self.cost),
             ", operation=",
-            levenshtein_operation_print(self.operation),
+            operation_to_name(self.operation),
             ")",
         )
 
@@ -37,47 +56,59 @@ struct LevenshteinNode[T: TestableCollectionElement]:
         return String.write(self)
 
 
-fn levenshtein_operation_print[
-    T: TestableCollectionElement
-](operation: LevenshteinNode[T].operation_type) -> String:
-    if operation.isa[NoneType]():
-        return "None"
-    if operation.isa[LevenshteinSubstitution[T]]():
-        return str(operation[LevenshteinSubstitution[T]])
-    if operation.isa[LevenshteinInsertion[T]]():
-        return str(operation[LevenshteinInsertion[T]])
-    if operation.isa[LevenshteinDeletion[T]]():
-        return str(operation[LevenshteinDeletion[T]])
+fn operation_to_name(operation: Int) -> String:
+    if operation == Substitution:
+        return "Substitution"
+    if operation == Insertion:
+        return "Insertion"
+    if operation == Deletion:
+        return "Deletion"
+    if operation == Null:
+        return "Null"
     return "Unknown operation"
 
 
-fn levenshtein_operation_equal[
-    T: TestableCollectionElement
-](
-    a: LevenshteinNode[T].operation_type, b: LevenshteinNode[T].operation_type
-) -> Bool:
-    if a.isa[NoneType]() and b.isa[NoneType]():
-        return True
+# fn levenshtein_operation_print[
+#     T: TestableCollectionElement
+# ](operation: LevenshteinNode[T].operation_type) -> String:
+#     if operation.isa[NoneType]():
+#         return "None"
+#     if operation.isa[LevenshteinSubstitution[T]]():
+#         return str(operation[LevenshteinSubstitution[T]])
+#     if operation.isa[LevenshteinInsertion[T]]():
+#         return str(operation[LevenshteinInsertion[T]])
+#     if operation.isa[LevenshteinDeletion[T]]():
+#         return str(operation[LevenshteinDeletion[T]])
+#     return "Unknown operation"
 
-    if (
-        a.isa[LevenshteinSubstitution[T]]()
-        and b.isa[LevenshteinSubstitution[T]]()
-    ):
-        var a_value = a[LevenshteinSubstitution[T]]
-        var b_value = b[LevenshteinSubstitution[T]]
-        return a_value == b_value
 
-    if a.isa[LevenshteinInsertion[T]]() and b.isa[LevenshteinInsertion[T]]():
-        var a_value = a[LevenshteinInsertion[T]]
-        var b_value = b[LevenshteinInsertion[T]]
-        return a_value == b_value
+# fn levenshtein_operation_equal[
+#     T: TestableCollectionElement
+# ](
+#     a: LevenshteinNode[T].operation_type, b: LevenshteinNode[T].operation_type
+# ) -> Bool:
+#     if a.isa[NoneType]() and b.isa[NoneType]():
+#         return True
 
-    if a.isa[LevenshteinDeletion[T]]() and b.isa[LevenshteinDeletion[T]]():
-        var a_value = a[LevenshteinDeletion[T]]
-        var b_value = b[LevenshteinDeletion[T]]
-        return a_value == b_value
+#     if (
+#         a.isa[LevenshteinSubstitution[T]]()
+#         and b.isa[LevenshteinSubstitution[T]]()
+#     ):
+#         var a_value = a[LevenshteinSubstitution[T]]
+#         var b_value = b[LevenshteinSubstitution[T]]
+#         return a_value == b_value
 
-    return False
+#     if a.isa[LevenshteinInsertion[T]]() and b.isa[LevenshteinInsertion[T]]():
+#         var a_value = a[LevenshteinInsertion[T]]
+#         var b_value = b[LevenshteinInsertion[T]]
+#         return a_value == b_value
+
+#     if a.isa[LevenshteinDeletion[T]]() and b.isa[LevenshteinDeletion[T]]():
+#         var a_value = a[LevenshteinDeletion[T]]
+#         var b_value = b[LevenshteinDeletion[T]]
+#         return a_value == b_value
+
+#     return False
 
 
 @value
@@ -156,31 +187,81 @@ struct LevenshteinDeletion[T: TestableCollectionElement]:
         return String.write(self)
 
 
-struct Matrix[T: CollectionElement]:
-    var data: List[List[T]]
+struct SafeBuffer[T: AnyTrivialRegType]:
+    var _data: UnsafePointer[T]
+    var num_rows: Int
+    var num_cols: Int
+
+    fn __init__(inout self, num_rows: Int, num_cols: Int):
+        size = num_rows * num_cols
+        debug_assert(size > 0, "must have more than 0 elements")
+        self._data = UnsafePointer[T].alloc(size)
+        memset_zero(self._data, size)
+        self.num_rows = num_rows
+        self.num_cols = num_cols
+
+    fn __del__(owned self):
+        self._data.free()
+
+    fn __getitem__(self: Self, *idx: Int) -> T:
+        debug_assert(
+            0 <= idx[0] < self.num_rows, "row index must be within bounds"
+        )
+        debug_assert(
+            0 <= idx[1] < self.num_cols, "col index must be within bounds"
+        )
+        index = self.row_col_to_index(idx[0], idx[1])
+        return self._data[index]
+
+    fn __setitem__(inout self: Self, *idx: Int, value: T):
+        index = self.row_col_to_index(idx[0], idx[1])
+        self._data[index] = value
+
+    fn row_col_to_index(self, row: Int, col: Int) -> Int:
+        return self.num_cols * row + col
+
+
+struct Matrix[T: AnyTrivialRegType]:
+    var data: InlinedFixedVector[T]
+    var num_rows: Int
+    var num_cols: Int
 
     fn __init__(inout self: Self, num_rows: Int, num_cols: Int, value: T):
-        self.data = List[List[T]](capacity=num_rows)
-        for _ in range(num_rows):
-            columns = List[T](capacity=num_cols)
-            for _ in range(num_cols):
-                columns.append(value)
-            self.data.append(columns)
+        self.num_rows = num_rows
+        self.num_cols = num_cols
 
-    fn __getitem__(
-        ref [_]self: Self, *idx: Int
-    ) -> ref [__origin_of(self.data)] T:
-        return self.data[idx[0]][idx[1]]
+        self.data = InlinedFixedVector[T](num_rows * num_cols)
+        num_elements = num_rows * num_cols
+        for _ in range(num_elements):
+            self.data.append(value)
+
+    fn __getitem__(self: Self, *idx: Int) -> T:
+        index = self.row_col_to_index(idx[0], idx[1])
+        return self.data[index]
+
+    fn __setitem__(inout self: Self, *idx: Int, value: T):
+        index = self.row_col_to_index(idx[0], idx[1])
+        self.data[index] = value
+
+    fn row_col_to_index(self, row: Int, col: Int) -> Int:
+        return self.num_cols * row + col
 
 
 @value
-struct LevenshteinResult[T: TestableCollectionElement](Writable):
+struct LevenshteinResult(Writable):
+    # alias operation_type = Variant[
+    #     LevenshteinSubstitution[T],
+    #     LevenshteinInsertion[T],
+    #     LevenshteinDeletion[T],
+    #     NoneType,
+    # ]
+
     var cost: Int
-    var operations: List[LevenshteinNode[T]]
+    var operations: List[Int]
 
     fn write_to[W: Writer](self, inout writer: W):
         try:
-            str_operations = print_list[LevenshteinNode[T]](self.operations)
+            str_operations = print_list(self.operations)
         except:
             str_operations = "Some error occurred while printing operations"
 
@@ -199,30 +280,66 @@ struct LevenshteinResult[T: TestableCollectionElement](Writable):
 
 fn levenshtein_distance[
     T: TestableCollectionElement
-](original: List[T], transformed: List[T]) -> LevenshteinResult[T]:
+](original: List[T], transformed: List[T]) -> Int:
+    m = len(original)
+    n = len(transformed)
+
+    cost_matrix = SafeBuffer[Int](m + 1, n + 1)
+
+    # Initialize base cases
+    for i in range(1, m + 1):
+        cost_matrix[i, 0] = i
+    for j in range(1, n + 1):
+        cost_matrix[0, j] = j
+
+    # Fill the matrix
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            is_element_equal = original[i - 1] == transformed[j - 1]
+            if is_element_equal:
+                # No operation needed, copy the value from the diagonal,
+                # as no cost is incurred.
+                cost_matrix[i, j] = cost_matrix[i - 1, j - 1]
+            else:
+                deletion_cost = cost_matrix[i - 1, j]
+                insertion_cost = cost_matrix[i, j - 1]
+                substitution_cost = cost_matrix[i - 1, j - 1]
+
+                if (
+                    deletion_cost < insertion_cost
+                    and deletion_cost < substitution_cost
+                ):
+                    cost = 1 + deletion_cost
+                elif (
+                    insertion_cost < deletion_cost
+                    and insertion_cost < substitution_cost
+                ):
+                    cost = 1 + insertion_cost
+                else:
+                    cost = 1 + substitution_cost
+
+                cost_matrix[i, j] = cost
+
+    return cost_matrix[m, n]
+
+
+fn levenshtein_distance2[
+    T: TestableCollectionElement
+](original: List[T], transformed: List[T]) -> LevenshteinResult:
     t0 = time.perf_counter_ns()
 
     m = len(original)
     n = len(transformed)
 
-    node_matrix = Matrix[LevenshteinNode[T]](
-        m + 1,
-        n + 1,
-        LevenshteinNode[T](cost=0, operation=NoneType()),
-    )
+    cost_matrix = Matrix[Int](m + 1, n + 1, 0)
+
     t00 = time.perf_counter_ns()
 
     # Initialize base cases
     for i in range(1, m + 1):
-        node_matrix[i, 0] = LevenshteinNode[T](
-            cost=i,
-            operation=LevenshteinInsertion(inserted=original[i - 1]),
-        )
+        cost_matrix[i, 0] = i
     for j in range(1, n + 1):
-        node_matrix[0, j] = LevenshteinNode[T](
-            cost=j,
-            operation=LevenshteinDeletion(deleted=transformed[j - 1]),
-        )
+        cost_matrix[0, j] = j
 
     t01 = time.perf_counter_ns()
 
@@ -233,112 +350,213 @@ fn levenshtein_distance[
             if is_element_equal:
                 # No operation needed, copy the value from the diagonal,
                 # as no cost is incurred.
-                node_matrix[i, j].cost = node_matrix[i - 1, j - 1].cost
-                node_matrix[i, j].operation = NoneType()
+                cost_matrix[i, j] = cost_matrix[i - 1, j - 1]
+                # node_matrix[i, j].operation = NoneType()
             else:
-                deletion_cost = node_matrix[i - 1, j].cost
-                insertion_cost = node_matrix[i, j - 1].cost
-                substitution_cost = node_matrix[i - 1, j - 1].cost
+                deletion_cost = cost_matrix[i - 1, j]
+                insertion_cost = cost_matrix[i, j - 1]
+                substitution_cost = cost_matrix[i - 1, j - 1]
 
                 if (
                     deletion_cost < insertion_cost
                     and deletion_cost < substitution_cost
                 ):
-                    node = LevenshteinNode[T](
-                        cost=1 + deletion_cost,
-                        operation=LevenshteinDeletion(deleted=original[i - 1]),
-                    )
+                    cost = 1 + deletion_cost
+                # node = LevenshteinNode[T](
+                #     cost=1 + deletion_cost,
+                #     operation=LevenshteinDeletion(deleted=original[i - 1]),
+                # )
                 elif (
                     insertion_cost < deletion_cost
                     and insertion_cost < substitution_cost
                 ):
-                    node = LevenshteinNode[T](
-                        cost=1 + insertion_cost,
-                        operation=LevenshteinInsertion(
-                            inserted=transformed[j - 1]
-                        ),
-                    )
+                    cost = 1 + insertion_cost
+                    # node = LevenshteinNode[T](
+                    #     cost=1 + insertion_cost,
+                    #     operation=LevenshteinInsertion(
+                    #         inserted=transformed[j - 1]
+                    #     ),
+                    # )
                 else:
-                    node = LevenshteinNode[T](
-                        cost=1 + substitution_cost,
-                        operation=LevenshteinSubstitution(
-                            original=original[i - 1],
-                            replacement=transformed[j - 1],
-                        ),
-                    )
+                    cost = 1 + substitution_cost
+                    # node = LevenshteinNode[T](
+                    #     cost=1 + substitution_cost,
+                    #     operation=LevenshteinSubstitution(
+                    #         original=original[i - 1],
+                    #         replacement=transformed[j - 1],
+                    #     ),
+                    # )
 
-                node_matrix[i, j] = node
+                cost_matrix[i, j] = cost
 
     t02 = time.perf_counter_ns()
 
+    # alias operation_type = Variant[
+    #     LevenshteinSubstitution[T],
+    #     LevenshteinInsertion[T],
+    #     LevenshteinDeletion[T],
+    #     NoneType,
+    # ]
+
     # Trace back
-    operations = List[LevenshteinNode[T]]()
+    operations_size = max(m, n)
+    # operations = List[
+    #     Variant[
+    #         LevenshteinSubstitution[T],
+    #         LevenshteinInsertion[T],
+    #         LevenshteinDeletion[T],
+    #         NoneType,
+    #     ]
+    # ](capacity=operations_size)
+    operations = List[Int](capacity=operations_size)
     i = m
     j = n
 
-    while i > 0 and j > 0:
-        current_node = node_matrix[i, j]
-        operations.append(current_node)
+    t021_sum = 0
+    t022_sum = 0
+    t023_sum = 0
 
-        if current_node.operation.isa[NoneType]():
+    while i > 0 and j > 0:
+        t020 = time.perf_counter_ns()
+        current_node = cost_matrix[i, j]
+        t021 = time.perf_counter_ns()
+        # operations.append(current_node)
+        t022 = time.perf_counter_ns()
+
+        if i > 0 and j > 0 and original[i - 1] == transformed[j - 1]:
             i -= 1
             j -= 1
-        elif current_node.operation.isa[LevenshteinDeletion[T]]():
+        elif i > 0 and (
+            j == 0 or cost_matrix[i, j] == cost_matrix[i - 1, j] + 1
+        ):
+            # operations.append(LevenshteinDeletion(deleted=original[i - 1]))
+            operations.append(Deletion)
             i -= 1
-        elif current_node.operation.isa[LevenshteinInsertion[T]]():
+        elif j > 0 and (
+            i == 0 or cost_matrix[i, j] == cost_matrix[i, j - 1] + 1
+        ):
+            # operations.append(LevenshteinInsertion(inserted=transformed[j - 1]))
+            operations.append(Insertion)
             j -= 1
         else:
+            # operations.append(
+            #     LevenshteinSubstitution(
+            #         original=original[i - 1],
+            #         replacement=transformed[j - 1],
+            #     )
+            # )
+            operations.append(Substitution)
             i -= 1
             j -= 1
+
+        # if current_node.operation.isa[NoneType]():
+        #     i -= 1
+        #     j -= 1
+        # elif current_node.operation.isa[LevenshteinDeletion[T]]():
+        #     i -= 1
+        # elif current_node.operation.isa[LevenshteinInsertion[T]]():
+        #     j -= 1
+        # else:
+        #     i -= 1
+        #     j -= 1
+
+        t023 = time.perf_counter_ns()
+
+        t021_sum += t021 - t020
+        t022_sum += t022 - t021
+        t023_sum += t023 - t022
 
     t03 = time.perf_counter_ns()
 
     # Somehow if we do `operations.reverse()`, all the operations in the list
     # become `None`. Have to figure out why this happens.
-    operations_reversed = List[LevenshteinNode[T]](capacity=len(operations))
-    for i in range(len(operations) - 1, -1, -1):
-        operations_reversed.append(operations[i])
+    # operations_reversed = List[
+    #     Variant[
+    #         LevenshteinSubstitution[T],
+    #         LevenshteinInsertion[T],
+    #         LevenshteinDeletion[T],
+    #         NoneType,
+    #     ]
+    # ](capacity=len(operations))
+    # for i in range(len(operations) - 1, -1, -1):
+    #     operations_reversed.append(operations[i])
+    operations.reverse()
 
     t04 = time.perf_counter_ns()
 
-    result = LevenshteinResult(
-        cost=node_matrix[m, n].cost, operations=operations_reversed
-    )
+    result = LevenshteinResult(cost=cost_matrix[m, n], operations=operations)
 
     t1 = time.perf_counter_ns()
 
     total_time = t1 - t0
 
-    print(
-        "Time taken to initialize matrix:",
-        (t00 - t0) / total_time * 100,
-        "%",
-    )
+    # print(
+    #     "Time taken to initialize matrix:",
+    #     (t00 - t0) / Float32(total_time) * 100,
+    #     "%",
+    #     " = ",
+    #     t00 - t0,
+    #     "ns",
+    # )
 
-    print(
-        "Time taken to initialize base cases:",
-        (t01 - t00) / total_time * 100,
-        "%",
-    )
+    # print(
+    #     "Time taken to initialize base cases:",
+    #     t01 - t00 / total_time * 100,
+    #     "%",
+    # )
 
-    print(
-        "Time taken to fill the matrix:",
-        (t02 - t01) / total_time * 100,
-        "%",
-    )
+    # print(
+    #     "Time taken to fill the matrix:",
+    #     (t02 - t01) / total_time * 100,
+    #     "%",
+    # )
 
-    print(
-        "Time taken to trace back:",
-        (t03 - t02) / total_time * 100,
-        "%",
-    )
+    # print(
+    #     "Time taken for 'current_node = node_matrix[i, j]':",
+    #     t021_sum / total_time * 100,
+    #     "%",
+    #     " = ",
+    #     (t021_sum) / 1_000_000,
+    #     "ns",
+    # )
 
-    print(
-        "Time taken to reverse operations:",
-        (t04 - t03) / total_time * 100,
-        "%",
-    )
+    # print(
+    #     "Time taken to append current_node to operations:",
+    #     t022_sum / total_time * 100,
+    #     "%",
+    #     " = ",
+    #     (t022_sum) / 1_000_000,
+    #     "ns",
+    # )
 
-    print("Time taken to compute Levenshtein distance:", (t1 - t0) / 1_000_000, "ms")
+    # print(
+    #     "Time taken to update i and j:",
+    #     t023_sum / total_time * 100,
+    #     "%",
+    #     " = ",
+    #     (t023_sum) / 1_000_000,
+    #     "ns",
+    # )
+
+    # print(
+    #     "Time taken to trace back:",
+    #     (t03 - t02) / total_time * 100,
+    #     "%",
+    #     " = ",
+    #     (t03 - t02) / 1_000_000,
+    #     "ns",
+    # )
+
+    # print(
+    #     "Time taken to reverse operations:",
+    #     (t04 - t03) / total_time * 100,
+    #     "%",
+    # )
+
+    # print(
+    #     "Time taken to compute Levenshtein distance:",
+    #     (t1 - t0) / 1_000_000,
+    #     "ns",
+    # )
 
     return result^
