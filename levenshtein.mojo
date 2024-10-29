@@ -187,7 +187,7 @@ struct LevenshteinDeletion[T: TestableCollectionElement]:
         return String.write(self)
 
 
-struct SafeBuffer[T: AnyTrivialRegType]:
+struct Matrix[T: AnyTrivialRegType]:
     var _data: UnsafePointer[T]
     var num_rows: Int
     var num_cols: Int
@@ -216,32 +216,6 @@ struct SafeBuffer[T: AnyTrivialRegType]:
     fn __setitem__(inout self: Self, *idx: Int, value: T):
         index = self.row_col_to_index(idx[0], idx[1])
         self._data[index] = value
-
-    fn row_col_to_index(self, row: Int, col: Int) -> Int:
-        return self.num_cols * row + col
-
-
-struct Matrix[T: AnyTrivialRegType]:
-    var data: InlinedFixedVector[T]
-    var num_rows: Int
-    var num_cols: Int
-
-    fn __init__(inout self: Self, num_rows: Int, num_cols: Int, value: T):
-        self.num_rows = num_rows
-        self.num_cols = num_cols
-
-        self.data = InlinedFixedVector[T](num_rows * num_cols)
-        num_elements = num_rows * num_cols
-        for _ in range(num_elements):
-            self.data.append(value)
-
-    fn __getitem__(self: Self, *idx: Int) -> T:
-        index = self.row_col_to_index(idx[0], idx[1])
-        return self.data[index]
-
-    fn __setitem__(inout self: Self, *idx: Int, value: T):
-        index = self.row_col_to_index(idx[0], idx[1])
-        self.data[index] = value
 
     fn row_col_to_index(self, row: Int, col: Int) -> Int:
         return self.num_cols * row + col
@@ -278,13 +252,45 @@ struct LevenshteinResult(Writable):
         return String.write(self)
 
 
-fn levenshtein_distance[
-    T: TestableCollectionElement
-](original: List[T], transformed: List[T]) -> Int:
-    m = len(original)
-    n = len(transformed)
+fn map_index_to_substring_index(
+    index: Int, start_index: Int, end_index: Int
+) -> Int:
+    if index >= end_index:
+        return end_index
+    return index + start_index
 
-    cost_matrix = SafeBuffer[Int](m + 1, n + 1)
+
+fn levenshtein_distance(original: String, transformed: String) -> Int:
+    start_index = 0
+    original_end = len(original)
+    transformed_end = len(transformed)
+
+    # Skip common prefix and suffix. We don't use the slice syntax as it
+    # allocates a new string which is slow.
+    while (
+        start_index < original_end
+        and start_index < transformed_end
+        and original.unsafe_ptr()[start_index]
+        == transformed.unsafe_ptr()[start_index]
+    ):
+        start_index += 1
+
+    while (
+        start_index < original_end
+        and start_index < transformed_end
+        and original.unsafe_ptr()[original_end - 1]
+        == transformed.unsafe_ptr()[transformed_end - 1]
+    ):
+        original_end -= 1
+        transformed_end -= 1
+
+    m = original_end - start_index
+    n = transformed_end - start_index
+
+    if start_index >= original_end or start_index >= transformed_end:
+        return max(m, n) - min(m, n)
+
+    cost_matrix = Matrix[Int](m + 1, n + 1)
 
     # Initialize base cases
     for i in range(1, m + 1):
@@ -295,30 +301,92 @@ fn levenshtein_distance[
     # Fill the matrix
     for i in range(1, m + 1):
         for j in range(1, n + 1):
-            is_element_equal = original[i - 1] == transformed[j - 1]
-            if is_element_equal:
+            i_substr = map_index_to_substring_index(
+                i, start_index, original_end
+            )
+            j_substr = map_index_to_substring_index(
+                j, start_index, transformed_end
+            )
+            # If we don't use `unsafe_ptr()`, the strings are copied which seems
+            # to be very slow.
+            if (
+                original.unsafe_ptr()[i_substr - 1]
+                == transformed.unsafe_ptr()[j_substr - 1]
+            ):
+                this_substitution_cost = 0
+            else:
+                this_substitution_cost = 1
+
+            deletion_cost = cost_matrix[i - 1, j] + 1
+            insertion_cost = cost_matrix[i, j - 1] + 1
+            substitution_cost = (
+                cost_matrix[i - 1, j - 1] + this_substitution_cost
+            )
+
+            if (
+                deletion_cost < insertion_cost
+                and deletion_cost < substitution_cost
+            ):
+                cost = deletion_cost
+            elif (
+                insertion_cost < deletion_cost
+                and insertion_cost < substitution_cost
+            ):
+                cost = insertion_cost
+            else:
+                cost = substitution_cost
+
+            cost_matrix[i, j] = cost
+
+    return cost_matrix[m, n]
+
+
+fn levenshtein_distance[
+    T: TestableCollectionElement
+](original: List[T], transformed: List[T]) -> Int:
+    m = len(original)
+    n = len(transformed)
+
+    cost_matrix = Matrix[Int](m + 1, n + 1)
+
+    # Initialize base cases
+    for i in range(1, m + 1):
+        cost_matrix[i, 0] = i
+    for j in range(1, n + 1):
+        cost_matrix[0, j] = j
+
+    # Fill the matrix
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            # is_element_equal = original[i - 1] == transformed[j - 1]
+            if original[i - 1] == transformed[j - 1]:
                 # No operation needed, copy the value from the diagonal,
                 # as no cost is incurred.
                 cost_matrix[i, j] = cost_matrix[i - 1, j - 1]
+                this_substitution_cost = 0
             else:
-                deletion_cost = cost_matrix[i - 1, j]
-                insertion_cost = cost_matrix[i, j - 1]
-                substitution_cost = cost_matrix[i - 1, j - 1]
+                this_substitution_cost = 1
 
-                if (
-                    deletion_cost < insertion_cost
-                    and deletion_cost < substitution_cost
-                ):
-                    cost = 1 + deletion_cost
-                elif (
-                    insertion_cost < deletion_cost
-                    and insertion_cost < substitution_cost
-                ):
-                    cost = 1 + insertion_cost
-                else:
-                    cost = 1 + substitution_cost
+            deletion_cost = cost_matrix[i - 1, j] + 1
+            insertion_cost = cost_matrix[i, j - 1] + 1
+            substitution_cost = (
+                cost_matrix[i - 1, j - 1] + this_substitution_cost
+            )
 
-                cost_matrix[i, j] = cost
+            if (
+                deletion_cost < insertion_cost
+                and deletion_cost < substitution_cost
+            ):
+                cost = deletion_cost
+            elif (
+                insertion_cost < deletion_cost
+                and insertion_cost < substitution_cost
+            ):
+                cost = insertion_cost
+            else:
+                cost = substitution_cost
+
+            cost_matrix[i, j] = cost
 
     return cost_matrix[m, n]
 
@@ -331,7 +399,7 @@ fn levenshtein_distance2[
     m = len(original)
     n = len(transformed)
 
-    cost_matrix = Matrix[Int](m + 1, n + 1, 0)
+    cost_matrix = Matrix[Int](m + 1, n + 1)
 
     t00 = time.perf_counter_ns()
 
