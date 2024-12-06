@@ -1,91 +1,9 @@
 from python import Python
+from memory import ArcPointer, Pointer, UnsafePointer
 import os
 from collections import Optional
-from my_utils import TestableCollectionElement, print_list
-import time
-from memory import Pointer, Arc, UnsafePointer
-from max.tensor import Tensor, TensorSpec, TensorShape
-from collections.vector import InlinedFixedVector
-from utils import Variant
-import benchmark
-from benchmark import Unit
-
+from my_utils import TestableCollectionElement, quick_sort
 from levenshtein import levenshtein_distance
-
-alias unit = benchmark.Unit.ms
-
-
-fn levenshtein_distance_2(a: String, b: String) raises -> Int:
-    t0 = time.perf_counter_ns()
-    rapidfuzz = Python.import_module("rapidfuzz")
-    t1 = time.perf_counter_ns()
-
-    distance = rapidfuzz.distance.Levenshtein.distance(a, b)
-    t2 = time.perf_counter_ns()
-
-    # print("Time to import rapidfuzz:", (t1 - t0) / 1_000_000, "ms")
-    # print("Time to calculate distance:", (t2 - t1) / 1_000_000, "ms")
-    return distance
-
-
-@always_inline
-fn _partition[
-    D: DType
-](inout vector: List[SIMD[D, 1]], low: Int, high: Int) -> Int:
-    var pivot = vector[high]
-    var i = low - 1
-    for j in range(low, high):
-        if vector[j] <= pivot:
-            i += 1
-            vector[j], vector[i] = vector[i], vector[j]
-    vector[i + 1], vector[high] = vector[high], vector[i + 1]
-    return i + 1
-
-
-fn _quick_sort[D: DType](inout vector: List[SIMD[D, 1]], low: Int, high: Int):
-    if low < high:
-        var pi = _partition(vector, low, high)
-        _quick_sort(vector, low, pi - 1)
-        _quick_sort(vector, pi + 1, high)
-
-
-fn quick_sort[D: DType](inout vector: List[SIMD[D, 1]]):
-    _quick_sort[D](vector, 0, len(vector) - 1)
-
-
-@always_inline
-fn swap[D: CollectionElement](inout vector: List[D], a: Int, b: Int):
-    vector[a], vector[b] = vector[b], vector[a]
-
-
-@always_inline
-fn _partition[
-    D: CollectionElement, lte: fn (D, D) capturing -> Bool
-](inout vector: List[D], low: Int, high: Int) -> Int:
-    var pivot = vector[high]
-    var i = low - 1
-    for j in range(low, high):
-        if lte(vector[j], pivot):
-            i += 1
-            swap(vector, i, j)
-
-    swap(vector, i + 1, high)
-    return i + 1
-
-
-fn _quick_sort[
-    D: CollectionElement, lte: fn (D, D) capturing -> Bool
-](inout vector: List[D], low: Int, high: Int):
-    if low < high:
-        var pi = _partition[D, lte](vector, low, high)
-        _quick_sort[D, lte](vector, low, pi - 1)
-        _quick_sort[D, lte](vector, pi + 1, high)
-
-
-fn quick_sort[
-    D: CollectionElement, lt: fn (D, D) capturing -> Bool
-](inout vector: List[D]):
-    _quick_sort[D, lt](vector, 0, len(vector) - 1)
 
 
 @value
@@ -127,11 +45,48 @@ struct BKTreeNode(TestableCollectionElement):
     fn add_child(inout self: BKTreeNode, child: BKTreeNode) -> None:
         self.children.append(child)
 
-        @parameter
-        fn lt(a: BKTreeNode, b: BKTreeNode) capturing -> Bool:
-            return a.parent_distance < b.parent_distance
+    fn traverse(self: BKTreeNode, path: String) raises -> Optional[BKTreeNode]:
+        """
+        Traverse the node's children using a path string, where each node text is separated by '->'.
 
-        # quick_sort[BKTreeNode, lt](self.children)
+        This makes testing easier, as we can easily traverse the tree using a string path.
+
+        For example, if the tree has the following structure:
+
+        root
+        ├── a
+        │   ├── b
+        │   │   └── c
+        │   └── d
+        └── e
+            └── f
+
+        The path to get to node 'c' would be 'root->a->b->c', and the path to get to node 'f' would be 'root->e->f'.
+        """
+        # Handles the case where there's a single path without separator. This should
+        # be the leaf node.
+        if path == self.text:
+            return self
+
+        if path == "":
+            return None
+
+        path_parts = path.split("->")
+        if len(path_parts) == 0:
+            return None
+
+        current_node = ArcPointer(self)
+
+        if path_parts[0] != current_node[].text:
+            return None
+
+        path_parts = path_parts[1:]
+        for child in self.children:
+            result = child[].traverse("->".join(path_parts))
+            if result:
+                return result
+
+        return None
 
     fn __eq__(self: Self, other: Self) -> Bool:
         return (
@@ -159,107 +114,18 @@ struct BKTreeNode(TestableCollectionElement):
     fn __str__(self: BKTreeNode) -> String:
         return String.write(self)
 
-    fn traverse(self: BKTreeNode, path: String) raises -> Optional[BKTreeNode]:
-        """Traverse the tree using a path string, where each node text is separated by '->'.
-        """
-        # Handles the case where there's a single path without separator. This should
-        # be the leaf node.
-        if path == self.text:
-            return self
-
-        if path == "":
-            return None
-
-        path_parts = path.split("->")
-        if len(path_parts) == 0:
-            return None
-
-        current_node = Arc(self)
-
-        if path_parts[0] != current_node[].text:
-            return None
-
-        path_parts = path_parts[1:]
-        for child in self.children:
-            result = child[].traverse("->".join(path_parts))
-            if result:
-                return result
-
-        return None
-
-
-fn split_string_into_chars(string: String) -> List[String]:
-    result = List[String](capacity=len(string))
-    for i in range(len(string)):
-        result.append(string[i : i + 1])
-    return result
-
-
-@value
-struct Times(Writable, Stringable):
-    var distance_ns: Int
-    var change_reference_ns: Int
-    var add_child_ns: Int
-    var new_node_ns: Int
-    var get_root_ns: Int
-
-    fn __init__(inout self: Self):
-        self.distance_ns = 0
-        self.change_reference_ns = 0
-        self.add_child_ns = 0
-        self.new_node_ns = 0
-        self.get_root_ns = 0
-
-    fn add_distance_ns(inout self: Self, ns: Int) -> None:
-        self.distance_ns += ns
-
-    fn add_change_reference_ns(inout self: Self, ns: Int) -> None:
-        self.change_reference_ns += ns
-
-    fn add_add_child_ns(inout self: Self, ns: Int) -> None:
-        self.add_child_ns += ns
-
-    fn add_new_node_ns(inout self: Self, ns: Int) -> None:
-        self.new_node_ns += ns
-
-    fn add_get_root_ns(inout self: Self, ns: Int) -> None:
-        self.get_root_ns += ns
-
-    fn write_to[W: Writer](self, inout writer: W):
-        writer.write(
-            "Times(",
-            "distance_ns=",
-            str(self.distance_ns),
-            ", change_reference_ns=",
-            str(self.change_reference_ns),
-            ", add_child_ns=",
-            str(self.add_child_ns),
-            ", new_node_ns=",
-            str(self.new_node_ns),
-            ", get_root_ns=",
-            str(self.get_root_ns),
-            ")",
-        )
-
-    fn as_percentages(self: Self):
-        total = (
-            self.distance_ns
-            + self.change_reference_ns
-            + self.add_child_ns
-            + self.new_node_ns
-        )
-        print("Total:", total)
-        print("Distance:", self.distance_ns / total * 100, "%")
-        print("Change reference:", self.change_reference_ns / total * 100, "%")
-        print("Add child:", self.add_child_ns / total * 100, "%")
-        print("New node:", self.new_node_ns / total * 100, "%")
-
-    fn __str__(self: Self) -> String:
-        return String.write(self)
-
 
 @value
 struct BKTree:
+    """
+    A [BK-tree](https://en.wikipedia.org/wiki/BK-tree) is useful for approximate string matching in a metric space.
+
+    The tree is initialized once with a list of elements (in this case only strings are supported), after which
+    it can be searched for elements that are within a certain distance of a query string using the Levenshtein distance.
+
+    The BKTree is implemented as a tree structure, where each node has a text value and a distance to its parent node.
+    """
+
     var root: Optional[BKTreeNode]
 
     fn __init__(inout self: Self, root: Optional[BKTreeNode] = None) -> None:
@@ -269,28 +135,28 @@ struct BKTree:
         self = BKTree()
         for i in range(len(elements)):
             self.insert_element(elements[i])
-        # for element in elements:
-        #     self.insert_element(element[])
 
-    fn traverse(self: Self, path: String) raises -> Optional[BKTreeNode]:
-        if not self.root:
-            return None
+    fn insert_elements(
+        inout self: Self, owned elements: List[String]
+    ) raises -> None:
+        for element in elements:
+            self.insert_element(element[])
 
-        return self.root.value().traverse(path)
-
-    # fn insert_elements(
-    #     inout self: Self, owned elements: List[String]
-    # ) raises -> None:
-    #     for element in elements:
-    #         self.insert_element(element[])
-
-    # TODO: make generic over distance metric and type of element.
     fn insert_element(inout self: Self, text: String) raises -> None:
+        """
+        Insert a new element into the tree according to the BK-tree algorithm.
+
+        Currently only strings and the Levenshtein distance are supported, but this could
+        be made generic in the future.
+
+        Args:
+            text: The text of the node to insert into the tree.
+        """
         if self.root is None:
             self.root = BKTreeNode(text=text, parent_distance=0)
             return
 
-        current_node_reference = Pointer.address_of(self.root.value())
+        current_node_reference = UnsafePointer.address_of(self.root.value())
 
         while True:
             distance_to_current_node = levenshtein_distance(
@@ -302,13 +168,13 @@ struct BKTree:
                 return
 
             var child_with_same_distance_reference: Optional[
-                Pointer[BKTreeNode, __origin_of(self.root._value)]
+                UnsafePointer[BKTreeNode, alignment=1]
             ] = None
 
             for child in current_node_reference[].children:
                 if child[].parent_distance == distance_to_current_node:
-                    child_with_same_distance_reference = Pointer.address_of(
-                        child[]
+                    child_with_same_distance_reference = (
+                        UnsafePointer.address_of(child[])
                     )
                     break
 
@@ -333,11 +199,23 @@ struct BKTree:
     fn search(
         self: Self, query: String, max_distance: Int
     ) raises -> List[BKTreeSearchResult]:
+        """
+        Search the tree for elements that are within a certain (edit) distance of the query string.
+
+        Args:
+            query: The query string to search for.
+            max_distance:
+                The maximum distance from the query string that the search should return.
+                A distance of 0 means that only exact matches are returned. The higher this value,
+                the more results will be returned, but the slower the search will be.
+        """
         if not self.root:
             return List[BKTreeSearchResult]()
 
         result = List[BKTreeSearchResult]()
-        # TODO: check how to use safe pointers here.
+        # NOTE: we use `UnsafePointer`s here to avoid copying the nodes, which is expensive. We're
+        # using raw `UnsafePointer`s instead of Pointers here as the language is not fully fledged yet
+        # and regular `Pointer`s are still quite limited.
         nodes_to_process = List[UnsafePointer[BKTreeNode]](
             UnsafePointer.address_of(self.root.value())
         )
@@ -367,7 +245,6 @@ struct BKTree:
                     # Here we're also copying the child (I think), which is inefficient.
                     nodes_to_process.append(UnsafePointer.address_of(child[]))
 
-
         @parameter
         fn lt(a: BKTreeSearchResult, b: BKTreeSearchResult) capturing -> Bool:
             return a.distance < b.distance
@@ -375,8 +252,37 @@ struct BKTree:
         quick_sort[BKTreeSearchResult, lt](result)
         return result
 
+    fn traverse(self: Self, path: String) raises -> Optional[BKTreeNode]:
+        """
+        Traverse the tree's nodes using a path string, where each node text is separated by '->'.
+
+        This makes testing easier, as we can easily traverse the tree using a string path.
+
+        For example, if the tree has the following structure:
+
+        root
+        ├── a
+        │   ├── b
+        │   │   └── c
+        │   └── d
+        └── e
+            └── f
+
+        The path to get to node 'c' would be 'root->a->b->c', and the path to get to node 'f' would be 'root->e->f'.
+        """
+        if not self.root:
+            return None
+
+        return self.root.value().traverse(path)
+
+
 @value
 struct BKTreeSearchResult(Writable, Stringable, EqualityComparable):
+    """
+    A search result from a BK-tree search, containing the text of the result
+    and distance to the query string.
+    """
+
     var text: String
     var distance: Int
 
@@ -403,179 +309,3 @@ struct BKTreeSearchResult(Writable, Stringable, EqualityComparable):
 
     fn __str__(self: Self) -> String:
         return String.write(self)
-
-
-@value
-struct SearchTimes(Writable, Stringable):
-    var get_nodes_to_process_ns: Int
-    var get_current_node_ns: Int
-    var get_distance_ns: Int
-    var add_to_result_ns: Int
-    var get_abs_distance_ns: Int
-    var append_child_ns: Int
-
-    fn __init__(inout self: Self):
-        self.get_nodes_to_process_ns = 0
-        self.get_current_node_ns = 0
-        self.get_distance_ns = 0
-        self.add_to_result_ns = 0
-        self.get_abs_distance_ns = 0
-        self.append_child_ns = 0
-
-    fn add_get_nodes_to_process_ns(inout self: Self, ns: Int) -> None:
-        self.get_nodes_to_process_ns += ns
-
-    fn add_get_current_node_ns(inout self: Self, ns: Int) -> None:
-        self.get_current_node_ns += ns
-
-    fn add_get_distance_ns(inout self: Self, ns: Int) -> None:
-        self.get_distance_ns += ns
-
-    fn add_add_to_result_ns(inout self: Self, ns: Int) -> None:
-        self.add_to_result_ns += ns
-
-    fn add_get_abs_distance_ns(inout self: Self, ns: Int) -> None:
-        self.get_abs_distance_ns += ns
-
-    fn add_append_child_ns(inout self: Self, ns: Int) -> None:
-        self.append_child_ns += ns
-
-    fn write_to[W: Writer](self, inout writer: W):
-        writer.write(
-            "SearchTimes(",
-            "get_nodes_to_process_ns=",
-            str(self.get_nodes_to_process_ns),
-            ", get_current_node_ns=",
-            str(self.get_current_node_ns),
-            ", get_distance_ns=",
-            str(self.get_distance_ns),
-            ", add_to_result_ns=",
-            str(self.add_to_result_ns),
-            ", get_abs_distance_ns=",
-            str(self.get_abs_distance_ns),
-            ", append_child_ns=",
-            str(self.append_child_ns),
-            ")",
-        )
-
-    fn __str__(self: Self) -> String:
-        return String.write(self)
-
-    fn as_percentages(self: Self):
-        total = (
-            self.get_nodes_to_process_ns
-            + self.get_current_node_ns
-            + self.get_distance_ns
-            + self.add_to_result_ns
-            + self.get_abs_distance_ns
-            + self.append_child_ns
-        )
-        print("Total:", total)
-        print(
-            "Get nodes to process:",
-            self.get_nodes_to_process_ns / total * 100,
-            "%",
-        )
-        print("Get current node:", self.get_current_node_ns / total * 100, "%")
-        print("Get distance:", self.get_distance_ns / total * 100, "%")
-        print("Add to result:", self.add_to_result_ns / total * 100, "%")
-        print("Get abs distance:", self.get_abs_distance_ns / total * 100, "%")
-        print("Append child:", self.append_child_ns / total * 100, "%")
-
-
-fn main() raises:
-    # max_distance = 1
-
-    # t0 = time.perf_counter_ns()
-    # # Open the file using a context manager
-    # lines = List[String]()
-    with open("dutch_words.txt", "r") as file:
-        content = file.read()
-        lines = content.lower().split("\n")
-
-    # print("opened words")
-
-    subset = lines
-
-    tree = BKTree(subset)
-
-    # @parameter
-    # fn bench_bktree() raises:
-    #     _ = BKTree(subset)
-
-    # print(
-    #     "create bktree time: ",
-    #     str(benchmark.run[bench_bktree](max_runtime_secs=0.5).mean(unit))
-    #     + str(unit),
-    # )
-
-    # search_times = SearchTimes()
-    # _ = tree.search("lucullusmaal", 1, search_times)
-    # print(search_times)
-    # search_times.as_percentages()
-
-    @parameter
-    fn bench_search() raises:
-        _ = tree.search("lucullusmaal", 3)
-
-    print(
-        "search time: ",
-        str(benchmark.run[bench_search](max_runtime_secs=0.5).mean(unit))
-        + str(unit),
-    )
-
-    # t1 = time.perf_counter_ns()
-    # tree = BKTree(lines)
-    # t2 = time.perf_counter_ns()
-
-    # print("built tree")
-
-    # query = "koperroo"
-
-    # result = tree.search(query, max_distance)
-    # print("searched")
-    # t3 = time.perf_counter_ns()
-
-    # print("Query: " + query)
-    # if result:
-    #     print("Found:", print_list(result))
-    # else:
-    #     print("Not found")
-
-    # print("Time to open file:", (t01 - t0) / 1_000_000, "ms")
-    # print("Time to read file content:", (t02 - t01) / 1_000_000, "ms")
-    # print("Time to to split lines:", (t1 - t02) / 1_000_000, "ms")
-    # print("Time to build tree:", (t2 - t1) / 1_000_000, "ms")
-    # print("Time to search:", (t3 - t2) / 1_000_000, "ms")
-    # print("Total time:", (t3 - t0) / 1_000_000, "ms")
-
-    # original = "ik was er".split(" ")
-    # transformed = "ik was".split(" ")
-
-    # t0 = time.perf_counter_ns()
-    # r = levenshtein_distance2(original, transformed)
-    # t1 = time.perf_counter_ns()
-
-    # print(r)
-
-    # print("Time to calculate distance:", (t1 - t0) / 1_000_000, "ms")
-    # var report = benchmark.run[lev_benchmark](max_iters=100000)
-
-    # report.print(Unit.ns)
-
-    # str1 = "werkingsprincipe"
-    # str2 = "aanbranden"
-    # reference_split = split_string_into_chars(str1)
-    # text_split = split_string_into_chars(str2)
-    # t0 = time.perf_counter_ns()
-    # _ = levenshtein_distance(reference_split, text_split)
-    # t1 = time.perf_counter_ns()
-    # print(
-    #     "Time to calculate distance:",
-    #     (t1 - t0),
-    #     "ns",
-    # )
-    # for op in r.operations:
-    #     x = op[]
-    #     x.take()
-    #     print(op[])

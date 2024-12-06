@@ -2,7 +2,10 @@ from levenshtein import (
     levenshtein_distance,
     levenshtein_distance_wagner_fischer_cached,
 )
+from levenshtein_optimized import remove_common_affix
 from testing import assert_equal
+from testing.testing import Testable
+from my_utils import TestableCollectionElement
 
 
 def test_levenshtein_distance_empty_strings():
@@ -91,3 +94,72 @@ def test_levenshtein_wagner_fischer_cached():
         levenshtein_distance_wagner_fischer_cached("hello!", "hello?"), 1
     )
     assert_equal(levenshtein_distance_wagner_fischer_cached("@#$", "@#$"), 0)
+
+
+def assert_tuple_equal[
+    T: TestableCollectionElement
+](actual: Tuple[T, T], expected: Tuple[T, T]) -> None:
+    assert_equal(actual[0], expected[0])
+    assert_equal(actual[1], expected[1])
+
+
+def test_remove_common_affix():
+    # Test common prefix only
+    assert_tuple_equal(
+        remove_common_affix("hello world", "hello there"),
+        (String("world"), String("there")),
+    )
+
+    # Test common suffix only
+    assert_tuple_equal(
+        remove_common_affix("big cat", "small cat"),
+        (String("big"), String("small")),
+    )
+
+    # Test both common prefix and suffix
+    assert_tuple_equal(
+        remove_common_affix("test_file.txt", "test_data.txt"),
+        (String("file"), String("data")),
+    )
+
+    # Test no common affixes
+    assert_tuple_equal(
+        remove_common_affix("abc", "xyz"),
+        (String("abc"), String("xyz")),
+    )
+
+    # Test identical strings
+    assert_tuple_equal(
+        remove_common_affix("same", "same"),
+        (String(""), String("")),
+    )
+
+    # Test empty strings
+    assert_tuple_equal(
+        remove_common_affix("", ""),
+        (String(""), String("")),
+    )
+
+    # Test different length strings
+    assert_tuple_equal(
+        remove_common_affix("prefix_long_suffix", "prefix_suffix"),
+        (String("long_"), String("")),
+    )
+
+    # Test single character difference
+    assert_tuple_equal(
+        remove_common_affix("abcde", "abxde"),
+        (String("c"), String("x")),
+    )
+
+    # Test completely overlapping strings
+    assert_tuple_equal(
+        remove_common_affix("test", "test"),
+        (String(""), String("")),
+    )
+
+    # Test strings with special characters
+    assert_tuple_equal(
+        remove_common_affix("test@example.com", "test@sample.com"),
+        (String("ex"), String("s")),
+    )

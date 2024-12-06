@@ -6,3 +6,11 @@
 
 # vscode
 launch.json
+.venv
+*.ipynb
+
+.vscode/settings.json
+medicine_drugs.txt
+dutch_words.txt
+levenshtein_bk.mojo
+bench_levenshtein.mojo
